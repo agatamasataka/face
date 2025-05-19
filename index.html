@@ -2,23 +2,26 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>あがたまさたか 顔認証デモ</title>
+  <title>写真認識アプリ</title>
   <style>
-    body { font-family: sans-serif; text-align: center; margin: 0; background: #f4f4f4; }
+    body { font-family: sans-serif; text-align: center; margin: 0; background: #f7f7f7; }
+    h2 { margin-top: 24px; }
+    #controls { margin: 20px 0; }
+    input, button { padding: 6px 10px; margin: 4px; }
     #video { border: 1px solid #333; }
     #overlay { position: absolute; top: 0; left: 0; }
     #container { position: relative; display: inline-block; }
-    #status { margin-top: 10px; font-size: 1.2em; }
+    #status { margin-top: 12px; font-size: 1rem; }
   </style>
 </head>
 <body>
-  <h2>あがたまさたか 顔認証デモ</h2>
-  <p>
-    ①「参照画像を選択」でご自身の顔写真 (jpg/png) を 1 枚アップロード<br />
-    ②「カメラ開始」を押す → カメラ許可 → 顔が映るとラベルが表示されます
-  </p>
-  <input type="file" id="referenceUpload" accept="image/*" />
-  <button id="startBtn" disabled>カメラ開始</button>
+  <h2>写真認識アプリ</h2>
+  <div id="controls">
+    <input type="file" id="photoUpload" accept="image/*" />
+    <input type="text" id="nameInput" placeholder="名前を入力" />
+    <button id="registerBtn">登録</button>
+    <button id="startBtn" disabled>カメラ開始</button>
+  </div>
 
   <div id="container">
     <video id="video" width="640" height="480" autoplay muted></video>
@@ -26,51 +29,57 @@
   </div>
   <div id="status">モデル読込中…</div>
 
-  <!-- Face‑API を ES Module 形式で読み込み -->
+  <!-- Face-API (ESM) -->
   <script type="module">
     import * as faceapi from 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.esm.js';
 
     const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
-    const video = document.getElementById('video');
-    const overlay = document.getElementById('overlay');
-    const ctx = overlay.getContext('2d');
-    const statusEl = document.getElementById('status');
-    const referenceInput = document.getElementById('referenceUpload');
-    const startBtn = document.getElementById('startBtn');
+    const video     = document.getElementById('video');
+    const overlay   = document.getElementById('overlay');
+    const ctx       = overlay.getContext('2d');
+    const statusEl  = document.getElementById('status');
+    const photoInput= document.getElementById('photoUpload');
+    const nameInput = document.getElementById('nameInput');
+    const regBtn    = document.getElementById('registerBtn');
+    const startBtn  = document.getElementById('startBtn');
 
-    let referenceDescriptor = null;
+    let labeledDescriptor = null; // 登録済みデータ
 
-    // 1. モデルロード
+    // 1. モデル読み込み
     async function loadModels() {
       statusEl.textContent = 'モデル読込中…';
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
       await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-      statusEl.textContent = '参照画像をアップロードしてください';
+      statusEl.textContent = '写真と名前を登録してください';
     }
 
-    // 2. 参照画像を登録
-    referenceInput.addEventListener('change', async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
+    // 2. 写真 + 名前 を登録
+    regBtn.addEventListener('click', async () => {
+      const file = photoInput.files[0];
+      const label = nameInput.value.trim();
+      if (!file || !label) {
+        alert('写真と名前の両方を入力してください');
+        return;
+      }
       const img = await faceapi.bufferToImage(file);
-      const detection = await faceapi
+      const result = await faceapi
         .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
         .withFaceLandmarks()
         .withFaceDescriptor();
-      if (!detection) {
+      if (!result) {
         statusEl.textContent = '顔が検出できません。別の写真でお試しください';
         return;
       }
-      referenceDescriptor = detection.descriptor;
-      statusEl.textContent = '顔を登録しました。カメラを開始できます';
+      labeledDescriptor = new faceapi.LabeledFaceDescriptors(label, [result.descriptor]);
+      statusEl.textContent = `「${label}」を登録しました。カメラを開始できます`;
       startBtn.disabled = false;
     });
 
-    // 3. カメラ開始 → 認識ループ
+    // 3. カメラ開始
     startBtn.addEventListener('click', async () => {
-      if (!referenceDescriptor) {
-        alert('先に参照画像を登録してください');
+      if (!labeledDescriptor) {
+        alert('先に写真と名前を登録してください');
         return;
       }
       startBtn.disabled = true;
@@ -83,13 +92,10 @@
       };
     });
 
-    // 4. 認識処理
+    // 4. 認識ループ
     async function runRecognition() {
       statusEl.textContent = '認識待機中…';
-      const matcher = new faceapi.FaceMatcher(
-        [new faceapi.LabeledFaceDescriptors('あがたまさたか', [referenceDescriptor])],
-        0.45
-      );
+      const matcher = new faceapi.FaceMatcher([labeledDescriptor], 0.45);
       const displaySize = { width: video.width, height: video.height };
       faceapi.matchDimensions(overlay, displaySize);
 
@@ -105,7 +111,7 @@
         resized.forEach((d) => {
           const best = matcher.findBestMatch(d.descriptor);
           const box = d.detection.box;
-          const label = best.label === 'あがたまさたか' && best.distance < 0.45 ? 'あがたまさたか' : 'Unknown';
+          const label = best.label !== 'unknown' && best.distance < 0.45 ? best.label : 'Unknown';
           const drawBox = new faceapi.draw.DrawBox(box, { label });
           drawBox.draw(overlay);
         });
