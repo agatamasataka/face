@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>あがたまさたか 顔認証デモ</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin: 0; background: #f4f4f4; }
+    #video { border: 1px solid #333; }
+    #overlay { position: absolute; top: 0; left: 0; }
+    #container { position: relative; display: inline-block; }
+    #status { margin-top: 10px; font-size: 1.2em; }
+  </style>
+</head>
+<body>
+  <h2>あがたまさたか 顔認証デモ</h2>
+  <p>
+    ①「参照画像を選択」でご自身の顔写真 (jpg/png) を 1 枚アップロード<br />
+    ②「カメラ開始」を押す → カメラ許可 → 顔が映るとラベルが表示されます
+  </p>
+  <input type="file" id="referenceUpload" accept="image/*" />
+  <button id="startBtn" disabled>カメラ開始</button>
+
+  <div id="container">
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+  <div id="status">モデル読込中…</div>
+
+  <!-- Face‑API を ES Module 形式で読み込み -->
+  <script type="module">
+    import * as faceapi from 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.esm.js';
+
+    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const statusEl = document.getElementById('status');
+    const referenceInput = document.getElementById('referenceUpload');
+    const startBtn = document.getElementById('startBtn');
+
+    let referenceDescriptor = null;
+
+    // 1. モデルロード
+    async function loadModels() {
+      statusEl.textContent = 'モデル読込中…';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      statusEl.textContent = '参照画像をアップロードしてください';
+    }
+
+    // 2. 参照画像を登録
+    referenceInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = await faceapi.bufferToImage(file);
+      const detection = await faceapi
+        .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      if (!detection) {
+        statusEl.textContent = '顔が検出できません。別の写真でお試しください';
+        return;
+      }
+      referenceDescriptor = detection.descriptor;
+      statusEl.textContent = '顔を登録しました。カメラを開始できます';
+      startBtn.disabled = false;
+    });
+
+    // 3. カメラ開始 → 認識ループ
+    startBtn.addEventListener('click', async () => {
+      if (!referenceDescriptor) {
+        alert('先に参照画像を登録してください');
+        return;
+      }
+      startBtn.disabled = true;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      video.srcObject = stream;
+      statusEl.textContent = 'カメラ起動中…';
+      video.onloadedmetadata = () => {
+        video.play();
+        runRecognition();
+      };
+    });
+
+    // 4. 認識処理
+    async function runRecognition() {
+      statusEl.textContent = '認識待機中…';
+      const matcher = new faceapi.FaceMatcher(
+        [new faceapi.LabeledFaceDescriptors('あがたまさたか', [referenceDescriptor])],
+        0.45
+      );
+      const displaySize = { width: video.width, height: video.height };
+      faceapi.matchDimensions(overlay, displaySize);
+
+      setInterval(async () => {
+        const detections = await faceapi
+          .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+
+        const resized = faceapi.resizeResults(detections, displaySize);
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        resized.forEach((d) => {
+          const best = matcher.findBestMatch(d.descriptor);
+          const box = d.detection.box;
+          const label = best.label === 'あがたまさたか' && best.distance < 0.45 ? 'あがたまさたか' : 'Unknown';
+          const drawBox = new faceapi.draw.DrawBox(box, { label });
+          drawBox.draw(overlay);
+        });
+      }, 200);
+    }
+
+    loadModels();
+  </script>
+</body>
+</html>
